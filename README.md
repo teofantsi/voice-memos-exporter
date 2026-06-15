@@ -47,7 +47,7 @@ open "dist/Voice Memos Exporter.app"
 GitHub Actions also builds the app automatically:
 
 - Push to `main` to create a downloadable Actions artifact
-- Push a tag like `v1.0.4` to create a zipped release asset
+- Push a tag like `1.0.ft.1` to create a zipped release asset
 
 ## How to Use
 
