@@ -670,6 +670,7 @@ rm -rf "$TEMP_ROOT"
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            cursor.execute("PRAGMA busy_timeout = 5000")
 
             deleted_count = 0
             failed = []
@@ -677,17 +678,26 @@ rm -rf "$TEMP_ROOT"
                 details = self.recording_details.get(path, {})
                 title = details.get('title') or os.path.splitext(os.path.basename(path))[0]
                 source_path = os.path.join(self.recordings_path, path)
+                savepoint_name = f"delete_{deleted_count}_{len(failed)}"
 
                 try:
+                    cursor.execute(f"SAVEPOINT {savepoint_name}")
+                    cursor.execute("DELETE FROM ZCLOUDRECORDING WHERE ZPATH = ?", (path,))
+                    if cursor.rowcount == 0:
+                        raise RuntimeError("Recording was not found in the Voice Memos database.")
+
                     if os.path.exists(source_path):
                         if os.path.isdir(source_path):
                             shutil.rmtree(source_path)
                         else:
                             os.remove(source_path)
-                    cursor.execute("DELETE FROM ZCLOUDRECORDING WHERE ZPATH = ?", (path,))
+
+                    cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
                     deleted_count += 1
-                except Exception:
-                    failed.append(title)
+                except Exception as error:
+                    cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                    cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                    failed.append((title, str(error)))
 
             conn.commit()
             conn.close()
@@ -696,11 +706,15 @@ rm -rf "$TEMP_ROOT"
             self.load_recordings()
 
             if failed:
-                failed_list = "\n".join(f"  - {name}" for name in failed)
+                failed_list = "\n".join(f"  - {name}: {reason}" for name, reason in failed)
+                locked_hint = ""
+                if any("locked" in reason.lower() for _, reason in failed):
+                    locked_hint = "\n\nTip: close Apple's Voice Memos app and try again."
                 messagebox.showwarning(
                     "Delete Partially Complete",
                     f"Deleted {deleted_count} {noun}.\n\n"
                     f"Failed to delete {len(failed)} {('recording' if len(failed) == 1 else 'recordings')}:\n{failed_list}"
+                    f"{locked_hint}"
                 )
             else:
                 messagebox.showinfo("Delete Complete", f"Deleted {deleted_count} {noun}.")
