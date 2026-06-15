@@ -13,9 +13,14 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-macos:
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Check out repository
@@ -53,3 +58,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: "Voice-Memos-Exporter-${{ github.ref_name }}.zip"
+          token: ${{ secrets.GITHUB_TOKEN }}
