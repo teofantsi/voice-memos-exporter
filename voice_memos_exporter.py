@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 APP_NAME = "Voice Memos Exporter"
-DEFAULT_APP_VERSION = "1.0.3"
+DEFAULT_APP_VERSION = "1.0.ft.3"
 GITHUB_REPO = "teofantsi/voice-memos-exporter"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases"
@@ -42,6 +42,7 @@ class VoiceMemosExporter:
         self.updating_selection = False
         self.update_progress_window = None
         self.update_progress_label_var = tk.StringVar(value="")
+        self.current_version = self.get_current_version()
         
         # Create GUI elements
         self.create_menu()
@@ -65,6 +66,7 @@ class VoiceMemosExporter:
 
         settings_menu = tk.Menu(menubar, tearoff=0)
         settings_menu.add_command(label="Check for Updates", command=self.check_for_updates)
+        settings_menu.add_command(label="About", command=self.show_about_dialog)
         settings_menu.add_separator()
         settings_menu.add_command(label="Open Security Settings", command=self.open_security_preferences)
 
@@ -214,6 +216,13 @@ class VoiceMemosExporter:
                     pass
         return DEFAULT_APP_VERSION
 
+    def show_about_dialog(self):
+        messagebox.showinfo(
+            "About Voice Memos Exporter",
+            f"{APP_NAME}\nVersion: {self.current_version}\n\n"
+            f"Releases: {RELEASES_PAGE_URL}"
+        )
+
     def show_update_progress(self, message):
         if self.update_progress_window and self.update_progress_window.winfo_exists():
             self.update_progress_label_var.set(message)
@@ -284,18 +293,20 @@ class VoiceMemosExporter:
             return
 
         release_label = release_data.get("name") or release_data.get("tag_name") or "latest release"
-        current_version = self.get_current_version()
+        current_version = self.current_version
+        install_target = self.get_install_target_path()
         should_install = messagebox.askyesno(
             "Install Update",
             f"Current app version: {current_version}\n"
-            f"Latest GitHub release: {release_label}\n\n"
+            f"Latest GitHub release: {release_label}\n"
+            f"Install destination: {install_target}\n\n"
             "Download and install this release now?"
         )
         if should_install:
             self.show_update_progress(f"Downloading {release_label}...")
             threading.Thread(
                 target=self._download_and_install_update_worker,
-                args=(asset["browser_download_url"], release_label),
+                args=(asset["browser_download_url"], release_label, install_target),
                 daemon=True
             ).start()
 
@@ -318,7 +329,7 @@ class VoiceMemosExporter:
         os.makedirs(applications_directory, exist_ok=True)
         return os.path.join(applications_directory, f"{APP_NAME}.app")
 
-    def _download_and_install_update_worker(self, download_url, release_label):
+    def _download_and_install_update_worker(self, download_url, release_label, target_app_path):
         temp_dir = tempfile.mkdtemp(prefix="voice-memos-updater-")
         zip_path = os.path.join(temp_dir, "update.zip")
         try:
@@ -342,7 +353,6 @@ class VoiceMemosExporter:
             if not extracted_app_path:
                 raise RuntimeError("The downloaded release did not contain a macOS app bundle.")
 
-            target_app_path = self.get_install_target_path()
             installer_script = os.path.join(temp_dir, "install_update.sh")
             installer_contents = f"""#!/bin/bash
 set -e
@@ -383,7 +393,7 @@ rm -rf "$TEMP_ROOT"
             "Install Ready",
             f"{release_label} has been downloaded.\n\n"
             f"It will be installed to:\n{target_app_path}\n\n"
-            "The app will now quit, replace itself, and relaunch. Continue?"
+            "The app will now quit, replace itself, and relaunch.\n\nContinue?"
         )
         if not should_quit:
             return
