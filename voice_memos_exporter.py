@@ -18,6 +18,7 @@ class VoiceMemosExporter:
         
         # Variables
         self.selected_items = set()
+        self.recording_details = {}
         self.db_path = os.path.expanduser("~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/CloudRecordings.db")
         self.recordings_path = os.path.dirname(self.db_path)
         self.search_var = tk.StringVar()
@@ -100,7 +101,12 @@ class VoiceMemosExporter:
         ttk.Entry(search_frame, textvariable=self.search_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
         
         # Create treeview with title column
-        self.tree = ttk.Treeview(main_frame, columns=('title', 'date', 'duration', 'checked'), show='headings')
+        self.tree = ttk.Treeview(
+            main_frame,
+            columns=('title', 'date', 'duration', 'checked', 'path'),
+            show='headings',
+            displaycolumns=('title', 'date', 'duration', 'checked')
+        )
         self.tree.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Configure treeview columns
@@ -113,6 +119,7 @@ class VoiceMemosExporter:
         self.tree.column('date', width=200)
         self.tree.column('duration', width=100)
         self.tree.column('checked', width=80, anchor='center')
+        self.tree.column('path', width=0, stretch=False)
         
         # Style configuration for better visibility
         style = ttk.Style()
@@ -148,10 +155,8 @@ class VoiceMemosExporter:
     def filter_recordings(self, *args):
         """Filter recordings based on search term"""
         search_term = self.search_var.get().lower()
-        
-        # Store current items that are checked
-        checked_items = {item for item in self.tree.get_children() 
-                       if self.tree.item(item)['values'][3] == '☑'}
+
+        checked_items = set(self.selected_items)
         
         # Clear the tree view
         self.tree.delete(*self.tree.get_children())
@@ -167,6 +172,8 @@ class VoiceMemosExporter:
                 ORDER BY ZDATE DESC
             """)
             
+            self.recording_details = {}
+
             for path, title, date, duration in cursor.fetchall():
                 if path:  # Only process if path exists
                     # Use title if available, otherwise use filename
@@ -184,7 +191,12 @@ class VoiceMemosExporter:
                        for value in [display_title, date_str, duration_str]):
                         # Insert with the appropriate checked state
                         check_mark = '☑' if path in checked_items else '☐'
-                        self.tree.insert('', 'end', values=(display_title, date_str, duration_str, check_mark))
+                        self.recording_details[path] = {
+                            'title': display_title,
+                            'date': date_str,
+                            'duration': duration_str
+                        }
+                        self.tree.insert('', 'end', values=(display_title, date_str, duration_str, check_mark, path))
             
             conn.close()
             
@@ -211,6 +223,8 @@ class VoiceMemosExporter:
             for item in self.tree.get_children():
                 self.tree.delete(item)
             
+            self.recording_details = {}
+
             # Insert recordings into treeview
             for path, title, date, duration in cursor.fetchall():
                 if path:  # Only process if path exists
@@ -224,8 +238,14 @@ class VoiceMemosExporter:
                     # Format duration
                     duration_str = f"{int(duration // 60)}:{int(duration % 60):02d}"
                     
+                    self.recording_details[path] = {
+                        'title': display_title,
+                        'date': date_str,
+                        'duration': duration_str
+                    }
+
                     # Insert into treeview
-                    self.tree.insert('', 'end', values=(display_title, date_str, duration_str, '☐'), tags=('unchecked',))
+                    self.tree.insert('', 'end', values=(display_title, date_str, duration_str, '☐', path), tags=('unchecked',))
             
             conn.close()
             
@@ -243,22 +263,27 @@ class VoiceMemosExporter:
                 self.toggle_item(item)
 
     def toggle_item(self, item):
-        if item in self.selected_items:
-            self.selected_items.remove(item)
+        if not item:
+            return
+
+        path = self.tree.set(item, 'path')
+        if path in self.selected_items:
+            self.selected_items.remove(path)
             self.tree.set(item, 'checked', '☐')
         else:
-            self.selected_items.add(item)
+            self.selected_items.add(path)
             self.tree.set(item, 'checked', '☑')
 
     def select_all(self):
         all_items = self.tree.get_children()
         for item in all_items:
-            self.selected_items.add(item)
+            path = self.tree.set(item, 'path')
+            self.selected_items.add(path)
             self.tree.set(item, 'checked', '☑')
         self.tree.selection_set(all_items)
 
     def deselect_all(self):
-        for item in self.selected_items:
+        for item in self.tree.get_children():
             self.tree.set(item, 'checked', '☐')
         self.selected_items.clear()
         self.tree.selection_remove(*self.tree.get_children())
@@ -287,57 +312,37 @@ class VoiceMemosExporter:
             progress_bar = ttk.Progressbar(progress_window, variable=progress_var, maximum=len(self.selected_items))
             progress_bar.pack(pady=10, padx=20, fill=tk.X)
             
-            # Connect to database
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
             exported_count = 0
             failed = []
-            for item in self.selected_items:
-                values = self.tree.item(item)['values']
-                title = values[0]
-                date_str = values[1]
-
+            for path in list(self.selected_items):
                 try:
-                    # Query the actual file path
-                    cursor.execute("""
-                        SELECT ZPATH
-                        FROM ZCLOUDRECORDING
-                        WHERE datetime(ZDATE + 978307200, 'unixepoch') = ?
-                        AND (ZENCRYPTEDTITLE = ? OR ZPATH LIKE ?)
-                    """, (date_str, title, f"%{os.path.basename(title)}%"))
-                    result = cursor.fetchone()
+                    source_path = os.path.join(self.recordings_path, path)
+                    details = self.recording_details.get(path, {})
+                    title = details.get('title') or os.path.splitext(os.path.basename(path))[0]
 
-                    if result and result[0]:
-                        source_path = os.path.join(self.recordings_path, result[0])
-                        if os.path.exists(source_path):
-                            # Create destination path with original filename
-                            title = values[0]
-                            _, ext = os.path.splitext(source_path)
-                            dest_path = os.path.join(export_dir, f"{title}{ext}")
+                    if os.path.exists(source_path):
+                        _, ext = os.path.splitext(source_path)
+                        dest_path = os.path.join(export_dir, f"{title}{ext}")
 
-                            # Handle duplicate filenames
-                            base, ext = os.path.splitext(dest_path)
-                            counter = 1
-                            while os.path.exists(dest_path):
-                                dest_path = f"{base}_{counter}{ext}"
-                                counter += 1
+                        # Handle duplicate filenames
+                        base, ext = os.path.splitext(dest_path)
+                        counter = 1
+                        while os.path.exists(dest_path):
+                            dest_path = f"{base}_{counter}{ext}"
+                            counter += 1
 
-                            # Copy file
-                            shutil.copy2(source_path, dest_path)
-                            exported_count += 1
-                        else:
-                            failed.append(title)
+                        # Copy file
+                        shutil.copy2(source_path, dest_path)
+                        exported_count += 1
                     else:
                         failed.append(title)
                 except Exception:
-                    failed.append(title)
+                    failed.append(details.get('title') or os.path.splitext(os.path.basename(path))[0])
 
                 # Update progress
                 progress_var.set(exported_count + len(failed))
                 progress_window.update()
 
-            conn.close()
             progress_window.destroy()
 
             if failed:
