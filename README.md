@@ -30,6 +30,25 @@ If you find this app useful, consider supporting me:
 3. Open the app
 4. Allow Full Disk Access when asked (needed to read Voice Memos)
 
+## Build From GitHub
+
+You can build the Mac app locally after cloning the repo:
+
+```bash
+git clone https://github.com/teofantsi/voice-memos-exporter.git
+cd voice-memos-exporter
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pyinstaller voice_memos_exporter.spec
+open "dist/Voice Memos Exporter.app"
+```
+
+GitHub Actions also builds the app automatically:
+
+- Push to `main` to create a downloadable Actions artifact
+- Push a tag like `v1.0.4` to create a zipped release asset
+
 ## How to Use
 
 1. Open the app
@@ -58,4 +77,3 @@ Made with ❤️
 
 If you find this app useful, consider supporting me:  
 ☕ [Buy Me a Coffee](https://www.buymeacoffee.com/rudrakabir)
-
