@@ -22,6 +22,8 @@ class VoiceMemosExporter:
         self.db_path = os.path.expanduser("~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/CloudRecordings.db")
         self.recordings_path = os.path.dirname(self.db_path)
         self.search_var = tk.StringVar()
+        self.selection_status_var = tk.StringVar(value="0 selected")
+        self.updating_selection = False
         
         # Create GUI elements
         self.create_widgets()
@@ -105,7 +107,8 @@ class VoiceMemosExporter:
             main_frame,
             columns=('title', 'date', 'duration', 'checked', 'path'),
             show='headings',
-            displaycolumns=('title', 'date', 'duration', 'checked')
+            displaycolumns=('title', 'date', 'duration', 'checked'),
+            selectmode='extended'
         )
         self.tree.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
         
@@ -140,7 +143,12 @@ class VoiceMemosExporter:
         
         ttk.Button(left_frame, text="Select All", command=self.select_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(left_frame, text="Deselect All", command=self.deselect_all).pack(side=tk.LEFT, padx=5)
-        ttk.Label(left_frame, text="Click checkbox column to select individual items").pack(side=tk.LEFT, padx=10)
+        ttk.Button(left_frame, text="Delete Selected", command=self.delete_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            left_frame,
+            text="Click checkboxes or use Shift-click / Shift-arrow to select multiple items"
+        ).pack(side=tk.LEFT, padx=10)
+        ttk.Label(button_frame, textvariable=self.selection_status_var).pack(side=tk.RIGHT, padx=(0, 10))
         
         # Right side export button
         ttk.Button(button_frame, text="Export Selected", command=self.export_selected).pack(side=tk.RIGHT, padx=5)
@@ -151,6 +159,10 @@ class VoiceMemosExporter:
         
         # Bind click event
         self.tree.bind('<Button-1>', self.on_click)
+        self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
+        self.tree.bind('<space>', self.on_space_key)
+        self.tree.bind('<Command-a>', self.on_select_all_shortcut)
+        self.tree.bind('<Control-a>', self.on_select_all_shortcut)
 
     def filter_recordings(self, *args):
         """Filter recordings based on search term"""
@@ -197,8 +209,9 @@ class VoiceMemosExporter:
                             'duration': duration_str
                         }
                         self.tree.insert('', 'end', values=(display_title, date_str, duration_str, check_mark, path))
-            
+
             conn.close()
+            self.sync_tree_selection()
             
         except sqlite3.Error as e:
             messagebox.showerror("Database Error", f"Error accessing database: {str(e)}")
@@ -248,6 +261,7 @@ class VoiceMemosExporter:
                     self.tree.insert('', 'end', values=(display_title, date_str, duration_str, '☐', path), tags=('unchecked',))
             
             conn.close()
+            self.sync_tree_selection()
             
         except sqlite3.Error as e:
             self.show_permissions_dialog()
@@ -261,6 +275,29 @@ class VoiceMemosExporter:
             if column == "#4":  # Check if clicking the 'checked' column
                 item = self.tree.identify_row(event.y)
                 self.toggle_item(item)
+                return "break"
+
+    def on_tree_select(self, _event=None):
+        if self.updating_selection:
+            return
+
+        self.selected_items = {
+            self.tree.set(item, 'path')
+            for item in self.tree.selection()
+            if self.tree.set(item, 'path')
+        }
+        self.refresh_checkmarks()
+        self.update_selection_status()
+
+    def on_space_key(self, _event=None):
+        focused_item = self.tree.focus()
+        if focused_item:
+            self.toggle_item(focused_item)
+            return "break"
+
+    def on_select_all_shortcut(self, _event=None):
+        self.select_all()
+        return "break"
 
     def toggle_item(self, item):
         if not item:
@@ -269,24 +306,51 @@ class VoiceMemosExporter:
         path = self.tree.set(item, 'path')
         if path in self.selected_items:
             self.selected_items.remove(path)
-            self.tree.set(item, 'checked', '☐')
         else:
             self.selected_items.add(path)
-            self.tree.set(item, 'checked', '☑')
+        self.sync_tree_selection(focus_item=item)
+
+    def refresh_checkmarks(self):
+        for item in self.tree.get_children():
+            path = self.tree.set(item, 'path')
+            self.tree.set(item, 'checked', '☑' if path in self.selected_items else '☐')
+
+    def sync_tree_selection(self, focus_item=None):
+        self.updating_selection = True
+        try:
+            selected_rows = []
+            for item in self.tree.get_children():
+                path = self.tree.set(item, 'path')
+                is_selected = path in self.selected_items
+                self.tree.set(item, 'checked', '☑' if is_selected else '☐')
+                if is_selected:
+                    selected_rows.append(item)
+
+            self.tree.selection_set(selected_rows)
+            if focus_item and self.tree.exists(focus_item):
+                self.tree.focus(focus_item)
+                self.tree.see(focus_item)
+        finally:
+            self.updating_selection = False
+
+        self.update_selection_status()
+
+    def update_selection_status(self):
+        count = len(self.selected_items)
+        noun = "recording" if count == 1 else "recordings"
+        self.selection_status_var.set(f"{count} {noun} selected")
 
     def select_all(self):
-        all_items = self.tree.get_children()
-        for item in all_items:
-            path = self.tree.set(item, 'path')
-            self.selected_items.add(path)
-            self.tree.set(item, 'checked', '☑')
-        self.tree.selection_set(all_items)
+        self.selected_items = {
+            self.tree.set(item, 'path')
+            for item in self.tree.get_children()
+            if self.tree.set(item, 'path')
+        }
+        self.sync_tree_selection()
 
     def deselect_all(self):
-        for item in self.tree.get_children():
-            self.tree.set(item, 'checked', '☐')
         self.selected_items.clear()
-        self.tree.selection_remove(*self.tree.get_children())
+        self.sync_tree_selection()
 
     def export_selected(self):
         if not self.selected_items:
@@ -359,6 +423,65 @@ class VoiceMemosExporter:
             messagebox.showerror("Database Error", f"Error accessing database: {str(e)}")
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred during export: {str(e)}")
+
+    def delete_selected(self):
+        if not self.selected_items:
+            messagebox.showwarning("No Selection", "Please select at least one recording to delete.")
+            return
+
+        selected_count = len(self.selected_items)
+        noun = "recording" if selected_count == 1 else "recordings"
+        confirmed = messagebox.askyesno(
+            "Delete Selected Recordings",
+            f"Are you sure you want to permanently delete {selected_count} {noun}?\n\n"
+            "This removes the original Voice Memos from your Mac and may also remove them from iCloud-synced devices.\n"
+            "This action cannot be undone."
+        )
+        if not confirmed:
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            deleted_count = 0
+            failed = []
+            for path in list(self.selected_items):
+                details = self.recording_details.get(path, {})
+                title = details.get('title') or os.path.splitext(os.path.basename(path))[0]
+                source_path = os.path.join(self.recordings_path, path)
+
+                try:
+                    if os.path.exists(source_path):
+                        if os.path.isdir(source_path):
+                            shutil.rmtree(source_path)
+                        else:
+                            os.remove(source_path)
+                    cursor.execute("DELETE FROM ZCLOUDRECORDING WHERE ZPATH = ?", (path,))
+                    deleted_count += 1
+                except Exception:
+                    failed.append(title)
+
+            conn.commit()
+            conn.close()
+
+            self.selected_items.clear()
+            self.load_recordings()
+
+            if failed:
+                failed_list = "\n".join(f"  - {name}" for name in failed)
+                messagebox.showwarning(
+                    "Delete Partially Complete",
+                    f"Deleted {deleted_count} {noun}.\n\n"
+                    f"Failed to delete {len(failed)} {('recording' if len(failed) == 1 else 'recordings')}:\n{failed_list}"
+                )
+            else:
+                messagebox.showinfo("Delete Complete", f"Deleted {deleted_count} {noun}.")
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error deleting recordings: {str(e)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred during delete: {str(e)}")
 
 def main():
     root = tk.Tk()
