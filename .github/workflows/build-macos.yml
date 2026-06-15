@@ -54,4 +54,10 @@ jobs:
             "Voice-Memos-Exporter-${GITHUB_REF_NAME}-${GITHUB_RUN_NUMBER}.zip"
 
       - name: Upload release asset
-        if: startsWith
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: "Voice-Memos-Exporter-${{ github.ref_name }}-${{ github.run_number }}.zip"
+          make_latest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
